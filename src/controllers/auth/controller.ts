@@ -368,7 +368,6 @@ class AuthController {
           name: true,
           identifier: true,
           role: true,
-          store: true,
         },
       });
 

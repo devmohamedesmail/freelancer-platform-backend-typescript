@@ -1,0 +1,171 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum SettingType {
+  string
+  number
+  boolean
+  json
+}
+
+model Setting {
+  id          Int         @id @default(autoincrement())
+  key         String      @unique
+  value       String
+  type        SettingType @default(string)
+  description String?
+  isPublic    Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("settings")
+}
+
+model Role {
+  id        Int      @id @default(autoincrement())
+  role      String   @unique
+  users     User[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("roles")
+}
+
+model User {
+  id            Int      @id @default(autoincrement())
+  identifier    String   @unique
+  password      String
+  name          String?
+  role          Role     @relation(fields: [role_id], references: [id])
+  provider_id   String?  @default("local")
+  provider_name String?  @default("local")
+  role_id       Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  gigs          Gig[]
+  orders        Order[]
+  reviews       Review[]
+
+  @@map("users")
+}
+
+
+
+
+
+
+
+model Category {
+  id          Int       @id @default(autoincrement())
+  title_ar        String    @unique
+  title_en        String    @unique
+  image       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+   // Relations
+  gigs        Gig[]
+  subcategories Subcategory[]
+
+  @@map("categories")
+}
+
+
+
+model Subcategory {
+  id          Int       @id @default(autoincrement())
+  title_ar        String
+  title_en        String
+  category    Category  @relation(fields: [category_id], references: [id])
+  category_id Int
+  gigs        Gig[]     // Optional: allow gigs to belong to a subcategory
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([title_ar, title_en ,  category_id]) // ensure unique subcategory per category
+  @@map("subcategories")
+}
+
+
+
+model Gig {
+  id             Int          @id @default(autoincrement())
+  title          String
+  description    String
+  price          Float
+  image          String?
+  seller         User         @relation(fields: [seller_id], references: [id])
+  seller_id      Int
+  category       Category     @relation(fields: [category_id], references: [id])
+  category_id    Int
+  subcategory    Subcategory? @relation(fields: [subcategory_id], references: [id])
+  subcategory_id Int?
+  orders         Order[]
+  reviews        Review[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@map("gigs")
+}
+
+
+
+model Order {
+  id        Int      @id @default(autoincrement())
+  gig       Gig      @relation(fields: [gig_id], references: [id])
+  gig_id    Int
+  buyer     User     @relation(fields: [buyer_id], references: [id])
+  buyer_id  Int
+  status    String   @default("pending") // pending, in_progress, completed, cancelled
+  amount    Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("orders")
+}
+
+
+
+model Review {
+  id        Int      @id @default(autoincrement())
+  gig       Gig      @relation(fields: [gig_id], references: [id])
+  gig_id    Int
+  user      User     @relation(fields: [user_id], references: [id])
+  user_id   Int
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("reviews")
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -3,6 +3,8 @@ import bcrypt from 'bcryptjs';
 import { createAuthSchema, loginAuthSchema } from '../../validations/auth/validation.js';
 import { prisma } from '../../lib/prisma.js';
 import { generateToken } from '../../utility/auth.js';
+import { sendMail } from '../../services/mail..js';
+
 
 class AuthController {
 
@@ -28,12 +30,27 @@ class AuthController {
         });
       }
 
-      const { name, identifier, password, role_id } = value;
+      const { name, email, phone, password, role_id } = value;
 
-      // 🔍 check if user exists
-      const existingUser = await prisma.user.findUnique({
-        where: { identifier },
+      // 🔍 check if user exists by email or phone
+      const orConditions = [] as any[]; // Type assertion to satisfy TS
+
+      if (email) orConditions.push({ email });
+      if (phone) orConditions.push({ phone });
+
+      const existingUser = await prisma.user.findFirst({
+        where: {
+          OR: orConditions.length ? (orConditions as any) : undefined,
+        },
       });
+
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: "User with this email or phone already exists",
+        });
+      }
+
 
       if (existingUser) {
         return res.status(400).json({
@@ -61,14 +78,16 @@ class AuthController {
       const newUser = await prisma.user.create({
         data: {
           name,
-          identifier,
+          email: email ?? null,
+          phone: phone ?? null,
           password: hashedPassword,
           role_id: role_id ?? defaultRole.id,
         },
         select: {
           id: true,
           name: true,
-          identifier: true,
+          email: true,
+          phone: true,
           role_id: true,
           createdAt: true,
           role: {
@@ -82,9 +101,6 @@ class AuthController {
 
       // 🔑 generate token
       const token = generateToken(newUser.id);
-
-
-
       return res.status(201).json({
         success: true,
         user: newUser,
@@ -109,8 +125,6 @@ class AuthController {
    */
   static login = async (req: Request, res: Response) => {
     try {
-      // ✅ validate input
-
       const { error, value } = loginAuthSchema.validate(req.body, {
         abortEarly: false,
         stripUnknown: true,
@@ -124,29 +138,51 @@ class AuthController {
         });
       }
 
-      const { identifier, password } = value;
+      const { email, phone, password } = value;
+      console.log(email, phone, password);
 
-      // 🔍 find user with relations
-      const user = await prisma.user.findUnique({
-        where: { identifier },
-        include: {
-          role: {
-            select: { 
-              id: true,
-              role: true 
-            },
-          },
+      if (!email && !phone) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email or phone is required',
+        });
+      }
+
+      // 🔹 بناء where array بشكل صحيح
+      const whereConditions = [];
+      if (email) whereConditions.push({ email });
+      if (phone) whereConditions.push({ phone });
+
+      if (whereConditions.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email or phone is required',
+        });
+      }
+
+      // 🔹 جلب المستخدم مع الحقول الأساسية + password
+      const user = await prisma.user.findFirst({
+        where: { OR: whereConditions },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          role_id: true,
+          password: true, // 🔹 مهم جدًا
+          role: { select: { id: true, role: true } },
         },
       });
 
-      if (!user) {
+      // 🔹 تحقق أن المستخدم موجود وأن لديه password
+      if (!user || !user.password) {
         return res.status(401).json({
           success: false,
           message: 'Invalid credentials',
         });
       }
 
-      // 🔐 check password
+      // 🔐 تحقق من كلمة المرور
       const isPasswordValid = await bcrypt.compare(password, user.password);
       if (!isPasswordValid) {
         return res.status(401).json({
@@ -155,7 +191,7 @@ class AuthController {
         });
       }
 
-      // 🔑 generate token
+      // 🔑 توليد التوكن
       const token = generateToken(user.id);
 
       return res.status(200).json({
@@ -163,7 +199,8 @@ class AuthController {
         user: {
           id: user.id,
           name: user.name,
-          identifier: user.identifier,
+          email: user.email,
+          phone: user.phone,
           role_id: user.role_id,
           role: user.role,
         },
@@ -177,6 +214,8 @@ class AuthController {
       });
     }
   };
+
+
 
 
 
@@ -210,7 +249,7 @@ class AuthController {
    */
   static update = async (req: Request, res: Response) => {
     try {
-      const { userId, name, identifier, currentPassword, newPassword } = req.body;
+      const { userId, name, email, phone, currentPassword, newPassword } = req.body;
 
       if (!userId) {
         return res.status(401).json({
@@ -220,7 +259,19 @@ class AuthController {
       }
 
       // Find user
-      const user = await prisma.user.findUnique({ where: { id: userId } });
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          password: true, // 🔹 مهم للتحقق من currentPassword
+          role_id: true,
+          role: { select: { id: true, role: true } },
+        },
+      });
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -230,24 +281,39 @@ class AuthController {
 
       const updateData: any = {};
 
+      // Update name
       if (name) updateData.name = name;
 
-      if (identifier && identifier !== user.identifier) {
-        const existingUser = await prisma.user.findUnique({ where: { identifier } });
+      // Update email
+      if (email && email !== user.email) {
+        const existingUser = await prisma.user.findUnique({ where: { email } });
         if (existingUser) {
           return res.status(400).json({
             success: false,
-            message: "This identifier is already taken",
+            message: "This email is already taken",
           });
         }
-        updateData.identifier = identifier;
+        updateData.email = email;
       }
 
+      // Update phone
+      if (phone && phone !== user.phone) {
+        const existingUser = await prisma.user.findUnique({ where: { phone } });
+        if (existingUser) {
+          return res.status(400).json({
+            success: false,
+            message: "This phone is already taken",
+          });
+        }
+        updateData.phone = phone;
+      }
+
+      // Update password
       if (newPassword) {
         if (!currentPassword) {
           return res.status(400).json({
             success: false,
-            message: "Current password is required to set new password",
+            message: "Current password is required to set a new password",
           });
         }
 
@@ -269,29 +335,33 @@ class AuthController {
         updateData.password = await bcrypt.hash(newPassword, 10);
       }
 
+      // Apply update
       const updatedUser = await prisma.user.update({
         where: { id: userId },
         data: updateData,
         select: {
           id: true,
           name: true,
-          identifier: true,
-          role: true,
+          email: true,
+          phone: true,
+          role_id: true,
+          role: { select: { id: true, role: true } },
         },
       });
 
-      res.status(200).json({
+      return res.status(200).json({
         success: true,
         user: updatedUser,
       });
 
     } catch (error: any) {
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
         message: error.message,
       });
     }
   };
+
 
   /**
    * Delete user account
@@ -366,7 +436,8 @@ class AuthController {
         select: {
           id: true,
           name: true,
-          identifier: true,
+          email: true,
+          phone: true,
           role: true,
         },
       });
@@ -391,6 +462,70 @@ class AuthController {
     }
   };
 
+
+
+
+
+  /**
+   * Foget Password
+   * 
+   */
+
+
+  static forgetPassword = async (req: Request, res: Response) => {
+    try {
+      const { email } = req.body;
+
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: "Email is required",
+        });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { email: email },
+      });
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      // Generate a new password
+      const newPassword = Math.random().toString(36).slice(-8);
+
+      // Hash the new password
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+      // update the new password in the database
+      await prisma.user.update({
+        where: { email: email },
+        data: { password: hashedPassword },
+      });
+
+      // send the new password to the user's email
+
+      await sendMail(
+        email,
+        "كلمة المرور الجديدة",
+        `مرحباً، كلمة المرور الجديدة الخاصة بك هي: ${newPassword}\nيرجى تغييرها بعد تسجيل الدخول.`
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "تم إرسال كلمة المرور الجديدة إلى بريدك الإلكتروني",
+      });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({
+        success: false,
+        message: "حدث خطأ أثناء إعادة تعيين كلمة المرور",
+      });
+    }
+  };
 
 
 }

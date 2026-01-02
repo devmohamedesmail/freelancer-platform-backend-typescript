@@ -48,7 +48,8 @@ class RoleController {
                         select: {
                             id: true,
                             name: true,
-                            identifier: true,
+                            email: true,
+                            phone: true,
                             createdAt: true
                         }
                     }
@@ -260,7 +261,8 @@ class RoleController {
                     select: {
                         id: true,
                         name: true,
-                        identifier: true,
+                        email: true,
+                        phone: true,
                         createdAt: true
                     }
                 }),
